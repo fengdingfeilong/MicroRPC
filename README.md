@@ -1,6 +1,6 @@
 # MicroRPC
 
-MicroRPC is a very light rpc framework and easy to extension. The Core just has about 1000 lines code.
+MicroRPC is a very light rpc library and easy to extension. The Core just has about 1000 lines code.
 
 MicroRPC  use TCP and json to transport. It's very easy to use.Here is the example.
 
