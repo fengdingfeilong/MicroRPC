@@ -195,7 +195,7 @@ namespace MicroRPC.Core
                     count = workSocket.Send(buffer);
                 else
                     count = workSocket.EndSend(result);
-                workSocket.BeginReceive(buffer, 0, buffer.Length, SocketFlags.None, new AsyncCallback(HandleReceive), workSocket);
+                BeginRecieve(workSocket);
             }
             catch (ObjectDisposedException ex)//server close the socket
             {
