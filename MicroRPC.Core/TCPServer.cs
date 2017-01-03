@@ -50,21 +50,23 @@ namespace MicroRPC.Core
         public event EventHandler<int> DataSended;
 
         private int _maxConnection = 10000;
-        private Semaphore maxConnectionSemphore;
 
         private BufferPool _bufferPool = new BufferPool(10000);
 
         private int _port = 9006;
         public TCPServer()
         {
-            maxConnectionSemphore = new Semaphore(_maxConnection, _maxConnection);
         }
         public TCPServer(int port, int maxconnection)
         {
             _port = port;
             _maxConnection = maxconnection;
-            maxConnectionSemphore = new Semaphore(_maxConnection, _maxConnection);
         }
+
+        /// <summary>
+        /// 是否使用异步方式通信
+        /// </summary>
+        public bool UseAsyncMode = false;
 
         public void Open()
         {
@@ -72,12 +74,106 @@ namespace MicroRPC.Core
             try
             {
                 listenSocket.Bind(new IPEndPoint(IPAddress.Any, _port));
+                if ((int)SocketOptionName.MaxConnections < _maxConnection)
+                    Console.WriteLine("the max connnections is out of system requirement");
                 listenSocket.Listen(_maxConnection);
-                listenSocket.BeginAccept(new AsyncCallback(HandleAccept), null);
+                if (UseAsyncMode)
+                    listenSocket.BeginAccept(new AsyncCallback(HandleAccept), null);  //使用异步方式              
+                else
+                {
+                    Task.Run(() =>
+                    {
+                        SyncAccept();
+                    });
+                }
             }
             catch
             {
                 Close();
+            }
+        }
+
+        //经测试，使用同步方式效果比异步的好
+        private void SyncAccept()
+        {
+            while (true)
+            {
+                Socket socket = null;
+                try
+                {
+                    socket = listenSocket.Accept();
+                }
+                catch (ObjectDisposedException ex)//server close the socket
+                {
+                }
+                catch (SocketException ex) //client close the socket ( SocketError.ConnectionReset ) 
+                {
+                    CloseSocket(socket);
+                }
+                catch (Exception ex)
+                {
+                    throw;
+                }
+                if (socket == null)
+                {
+                    Console.WriteLine("accept failed");
+                    Thread.Sleep(500);
+                    continue;
+                }
+                if (socket != null && NewClientAccepted != null) NewClientAccepted(this, socket);
+                Task.Factory.StartNew(w =>
+                {
+                    Socket workSocket = (Socket)w;
+                    while (true)
+                    {
+                        var buffer = new byte[1460];
+                        int count = 0;
+                        try
+                        {
+                            count = workSocket.Receive(buffer);
+                        }
+                        catch (ObjectDisposedException ex)//server close the socket
+                        {
+                        }
+                        catch (SocketException ex) //client close the socket ( SocketError.ConnectionReset ) 
+                        {
+                            CloseSocket(workSocket);
+                        }
+                        catch (Exception ex)
+                        {
+                            throw;
+                        }
+                        SocketDataEventArgs dataargs = new SocketDataEventArgs();
+                        dataargs.WorkSocket = workSocket;
+                        dataargs.Data = new byte[count];
+                        Array.Copy(buffer, dataargs.Data, count);
+                        if (DataReceived != null && count > 0)
+                            DataReceived(this, dataargs);
+                    }
+                }, socket);
+            }
+        }
+
+        public void SendData(SocketDataEventArgs args)
+        {
+            if (args == null || args.WorkSocket == null || !args.WorkSocket.Connected || args.Data == null) return;
+            try
+            {
+                Task.Factory.StartNew(() =>
+                {
+                    args.WorkSocket.Send(args.Data);
+                });
+            }
+            catch (ObjectDisposedException ex)//server close the socket
+            {
+            }
+            catch (SocketException ex) //client close the socket ( SocketError.ConnectionReset ) 
+            {
+                CloseSocket(args.WorkSocket);
+            }
+            catch
+            {
+                throw;
             }
         }
 
@@ -95,7 +191,6 @@ namespace MicroRPC.Core
                         else
                             workSocket = listenSocket.EndAccept(result);
                         BeginRecieve(workSocket);
-                        maxConnectionSemphore.WaitOne();
                         listenSocket.BeginAccept(new AsyncCallback(HandleAccept), null);
                     }
                 }
@@ -162,7 +257,7 @@ namespace MicroRPC.Core
             if (DataReceived != null && count > 0) DataReceived(this, dataargs);
         }
 
-        public void SendData(SocketDataEventArgs args)
+        public void SendDataAsync(SocketDataEventArgs args)
         {
             if (args == null || args.WorkSocket == null || !args.WorkSocket.Connected || args.Data == null) return;
             try
@@ -215,7 +310,7 @@ namespace MicroRPC.Core
         {
             if (socket != null)
             {
-                if (ClientDisconnected != null) ClientDisconnected(this, socket);
+                if (ClientDisconnected != null && socket.Connected) ClientDisconnected(this, socket);
                 try
                 {
                     if (socket.Connected)
@@ -224,7 +319,6 @@ namespace MicroRPC.Core
                 catch { }
                 socket.Close();
                 socket = null;
-                maxConnectionSemphore.Release();
             }
         }
 

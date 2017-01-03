@@ -33,12 +33,12 @@ namespace MicroRPC.Core
         private void InitServer()
         {
             tcpServer = new TCPServer(m_port, m_maxconnection);
-            tcpServer.Open();
             tcpServer.NewClientAccepted += TcpServer_NewClientAccepted;
             tcpServer.ClientDisconnected += TcpServer_ClientDisconnected;
             tcpServer.DataReceived += TcpServer_DataReceived;
             tcpServer.DataSended += TcpServer_DataSended;
             tcpServer.ServerClosed += TcpServer_ServerClosed;
+            tcpServer.Open();
         }
 
         private void TcpServer_NewClientAccepted(object sender, System.Net.Sockets.Socket e)
