@@ -93,7 +93,7 @@ namespace MicroRPC.Core
             }
         }
 
-        //经测试，使用同步方式效果比异步的好
+        //经测试，使用同步方式效果可连接多个客户端，但是响应较慢
         private void SyncAccept()
         {
             while (true)
