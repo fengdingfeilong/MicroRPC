@@ -81,7 +81,7 @@ namespace MicroRPC.Core
                     listenSocket.BeginAccept(new AsyncCallback(HandleAccept), null);  //使用异步方式              
                 else
                 {
-                    Task.Run(() =>
+                    Task.Factory.StartNew(() =>
                     {
                         SyncAccept();
                     });
