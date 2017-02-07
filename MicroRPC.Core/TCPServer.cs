@@ -25,6 +25,13 @@ namespace MicroRPC.Core
             set { _data = value; }
         }
 
+        private int _dataCount;
+        public int DataCount
+        {
+            get { return _dataCount; }
+            set { _dataCount = value; }
+        }
+
         public IDataParse DataParse { get; set; }
 
         private Object _tag;
@@ -41,6 +48,7 @@ namespace MicroRPC.Core
 
     public class TCPServer
     {
+        private const int MTU = 1460;
         private Socket listenSocket;
 
         public event EventHandler<Socket> NewClientAccepted;
@@ -50,8 +58,7 @@ namespace MicroRPC.Core
         public event EventHandler<int> DataSended;
 
         private int _maxConnection = 10000;
-
-        private BufferPool _bufferPool = new BufferPool(10000);
+        private int _backlog = 1000;
 
         private int _port = 9006;
         public TCPServer()
@@ -66,7 +73,7 @@ namespace MicroRPC.Core
         /// <summary>
         /// 是否使用异步方式通信
         /// </summary>
-        public bool UseAsyncMode = false;
+        public bool UseAsyncMode = true;
 
         public void Open()
         {
@@ -76,9 +83,9 @@ namespace MicroRPC.Core
                 listenSocket.Bind(new IPEndPoint(IPAddress.Any, _port));
                 if ((int)SocketOptionName.MaxConnections < _maxConnection)
                     Console.WriteLine("the max connnections is out of system requirement");
-                listenSocket.Listen(_maxConnection);
+                listenSocket.Listen(_backlog);
                 if (UseAsyncMode)
-                    listenSocket.BeginAccept(new AsyncCallback(HandleAccept), null);  //使用异步方式              
+                    listenSocket.BeginAccept(new AsyncCallback(HandleAccept), null);
                 else
                 {
                     Task.Factory.StartNew(() =>
@@ -93,7 +100,6 @@ namespace MicroRPC.Core
             }
         }
 
-        //经测试，使用同步方式效果可连接多个客户端，但是响应较慢
         private void SyncAccept()
         {
             while (true)
@@ -124,13 +130,14 @@ namespace MicroRPC.Core
                 Task.Factory.StartNew(w =>
                 {
                     Socket workSocket = (Socket)w;
+                    SocketDataEventArgs dataargs = new SocketDataEventArgs();
+                    dataargs.WorkSocket = workSocket;
+                    dataargs.Data = new byte[MTU];
                     while (true)
                     {
-                        var buffer = new byte[1460];
-                        int count = 0;
                         try
                         {
-                            count = workSocket.Receive(buffer);
+                            dataargs.DataCount = workSocket.Receive(dataargs.Data);
                         }
                         catch (ObjectDisposedException ex)//server close the socket
                         {
@@ -143,11 +150,7 @@ namespace MicroRPC.Core
                         {
                             throw;
                         }
-                        SocketDataEventArgs dataargs = new SocketDataEventArgs();
-                        dataargs.WorkSocket = workSocket;
-                        dataargs.Data = new byte[count];
-                        Array.Copy(buffer, dataargs.Data, count);
-                        if (DataReceived != null && count > 0)
+                        if (DataReceived != null && dataargs.DataCount > 0)
                             DataReceived(this, dataargs);
                     }
                 }, socket);
@@ -186,12 +189,8 @@ namespace MicroRPC.Core
                 {
                     lock (listenSocket)
                     {
-                        if (result.CompletedSynchronously)
-                            workSocket = listenSocket.Accept();
-                        else
-                            workSocket = listenSocket.EndAccept(result);
-                        BeginRecieve(workSocket);
-                        listenSocket.BeginAccept(new AsyncCallback(HandleAccept), null);
+                        workSocket = listenSocket.EndAccept(result);
+                        BeginReceive(workSocket);
                     }
                 }
             }
@@ -206,18 +205,18 @@ namespace MicroRPC.Core
             {
                 throw;
             }
+            listenSocket.BeginAccept(new AsyncCallback(HandleAccept), null);
             if (workSocket != null && NewClientAccepted != null) NewClientAccepted(this, workSocket);
         }
 
-        private void BeginRecieve(Socket workSocket)
+        private void BeginReceive(Socket workSocket)
         {
             if (workSocket != null && workSocket.Connected)
             {
-                byte[] buffer = _bufferPool.Get();
                 SocketDataEventArgs dataargs = new SocketDataEventArgs();
                 dataargs.WorkSocket = workSocket;
-                dataargs.Data = buffer;
-                dataargs.WorkSocket.BeginReceive(buffer, 0, buffer.Length, SocketFlags.None, new AsyncCallback(HandleReceive), dataargs);
+                dataargs.Data = new byte[MTU];
+                dataargs.WorkSocket.BeginReceive(dataargs.Data, 0, dataargs.Data.Length, SocketFlags.None, new AsyncCallback(HandleReceive), dataargs);
             }
         }
 
@@ -226,22 +225,10 @@ namespace MicroRPC.Core
             if (result == null || result.AsyncState == null) return;
             SocketDataEventArgs dataargs = (SocketDataEventArgs)result.AsyncState;
             Socket workSocket = dataargs.WorkSocket;
-            byte[] buffer = dataargs.Data;
-            int count = 0;
             try
             {
-                if (result.CompletedSynchronously)
-                    count = workSocket.Receive(buffer);
-                else
-                    count = workSocket.EndReceive(result);
-                if (count > 0)
-                {
-                    byte[] data = new byte[count];
-                    Array.Copy(buffer, data, count);
-                    dataargs.Data = data;
-                }
-                _bufferPool.Recycle(buffer);
-                BeginRecieve(workSocket);
+                dataargs.DataCount = workSocket.EndReceive(result);
+                BeginReceive(workSocket);
             }
             catch (ObjectDisposedException ex)//server close the socket
             {
@@ -254,7 +241,7 @@ namespace MicroRPC.Core
             {
                 throw;
             }
-            if (DataReceived != null && count > 0) DataReceived(this, dataargs);
+            if (DataReceived != null && dataargs.DataCount > 0) DataReceived(this, dataargs);
         }
 
         public void SendDataAsync(SocketDataEventArgs args)
@@ -286,11 +273,8 @@ namespace MicroRPC.Core
             int count = 0;
             try
             {
-                if (result.CompletedSynchronously)
-                    count = workSocket.Send(buffer);
-                else
-                    count = workSocket.EndSend(result);
-                BeginRecieve(workSocket);
+                count = workSocket.EndSend(result);
+                BeginReceive(workSocket);
             }
             catch (ObjectDisposedException ex)//server close the socket
             {
