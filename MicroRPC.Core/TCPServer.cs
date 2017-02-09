@@ -187,11 +187,8 @@ namespace MicroRPC.Core
             {
                 if (listenSocket != null)
                 {
-                    lock (listenSocket)
-                    {
-                        workSocket = listenSocket.EndAccept(result);
-                        BeginReceive(workSocket);
-                    }
+                     workSocket = listenSocket.EndAccept(result);
+                     BeginReceive(workSocket);
                 }
             }
             catch (ObjectDisposedException ex)//server close the socket
