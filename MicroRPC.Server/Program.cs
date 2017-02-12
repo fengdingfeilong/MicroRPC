@@ -16,7 +16,7 @@ namespace MicroRPC.ServerDemo
                 var server = new RPCServer();
                 server.PubService("IHello", typeof(HelloService));
                 server.PubService("ICalculate", typeof(CalculateService));
-                Console.WriteLine("Services are ready now.\r\nPress ESC to Exit the Server");
+                Console.WriteLine("Services are ready now.\r\nPress ESC to Exit the Server");                
             }
             catch (Exception ex)
             {

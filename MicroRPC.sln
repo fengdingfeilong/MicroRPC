@@ -1,7 +1,7 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
-# Visual Studio 2013
-VisualStudioVersion = 12.0.40629.0
+# Visual Studio 14
+VisualStudioVersion = 14.0.25420.1
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MicroRPC.Core", "MicroRPC.Core\MicroRPC.Core.csproj", "{D2083E61-34F2-4618-BA0A-9233059B5FB7}"
 EndProject
@@ -10,6 +10,10 @@ EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MicroRPC.ServerDemo", "MicroRPC.Server\MicroRPC.ServerDemo.csproj", "{AAF27467-39AB-4C88-9248-DF2BD00A7BEC}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MicroRPC.ClientDemo", "MicroRPC.Client\MicroRPC.ClientDemo.csproj", "{2A1A445A-EA9F-420E-998D-59AC6B3D0F08}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MicroRPC.PerformanceTestServer", "MicroRPC.PerformanceTestServer\MicroRPC.PerformanceTestServer.csproj", "{0D5E72BD-336D-4185-B37D-493FF5D9F049}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MicroRPC.PerformanceTestClient", "MicroRPC.PerformanceTestClient\MicroRPC.PerformanceTestClient.csproj", "{E54BFDCF-971E-4A84-8492-6D6DE0EA2FBA}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -33,6 +37,14 @@ Global
 		{2A1A445A-EA9F-420E-998D-59AC6B3D0F08}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{2A1A445A-EA9F-420E-998D-59AC6B3D0F08}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{2A1A445A-EA9F-420E-998D-59AC6B3D0F08}.Release|Any CPU.Build.0 = Release|Any CPU
+		{0D5E72BD-336D-4185-B37D-493FF5D9F049}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{0D5E72BD-336D-4185-B37D-493FF5D9F049}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{0D5E72BD-336D-4185-B37D-493FF5D9F049}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{0D5E72BD-336D-4185-B37D-493FF5D9F049}.Release|Any CPU.Build.0 = Release|Any CPU
+		{E54BFDCF-971E-4A84-8492-6D6DE0EA2FBA}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{E54BFDCF-971E-4A84-8492-6D6DE0EA2FBA}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{E54BFDCF-971E-4A84-8492-6D6DE0EA2FBA}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{E54BFDCF-971E-4A84-8492-6D6DE0EA2FBA}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

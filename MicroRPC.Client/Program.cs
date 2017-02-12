@@ -12,7 +12,9 @@ namespace MicroRPC.ClientDemo
         static void Main(string[] args)
         {
             MicroRPC.Core.RPCClient client = new Core.RPCClient();
-            client.Connect("127.0.0.1", 9006);
+            bool r = client.Connect("127.0.0.1", 9006);
+            if (!r) return;
+
             IHello hello = new HelloProxy(client);
             try
             {
@@ -66,8 +68,8 @@ namespace MicroRPC.ClientDemo
 
             try
             {
-                int a = calculate.Div(4, 2);
-                Console.WriteLine("4/2={0}", a);
+                int a = calculate.Div(4, 0);
+                Console.WriteLine("4/0={0}", a);
             }
             catch (Exception ex)
             {
@@ -76,14 +78,27 @@ namespace MicroRPC.ClientDemo
 
             try
             {
-                int a = calculate.Div(4, 0);
-                Console.WriteLine("4/0={0}", a);
+                int a = calculate.Div(4, 2);
+                Console.WriteLine("4/2={0}", a);
             }
             catch (Exception ex)
             {
                 Console.WriteLine(ex.Message);
             }
             client.Close();
+            
+            r = client.Connect("127.0.0.1", 9006);
+            if (!r)  return;
+            try
+            {
+                string s = hello.RelectText("hahaha");
+                Console.WriteLine(s);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+            }
+
             Console.ReadKey();
         }
     }
