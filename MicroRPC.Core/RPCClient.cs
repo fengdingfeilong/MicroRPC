@@ -21,19 +21,19 @@ namespace MicroRPC.Core
 
         public RPCClient()
         {
-            workSocket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
-            packageHelper = new PackageHelper();
-            packageHelper.PackageArrived += packageHelper_PackageArrived;
         }
 
         public bool Connect(string ipstring, int port)
         {
+            workSocket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+            packageHelper = new PackageHelper();
+            packageHelper.PackageArrived += packageHelper_PackageArrived;
             try
             {
                 workSocket.Connect(new IPEndPoint(IPAddress.Parse(ipstring), port));
                 return true;
             }
-            catch
+            catch(Exception ex)
             {
                 return false;
             }

@@ -2,6 +2,7 @@
 using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net.Sockets;
 using System.Text;
 using System.Threading.Tasks;
 
@@ -41,16 +42,26 @@ namespace MicroRPC.Core
             tcpServer.Open();
         }
 
-        private void TcpServer_NewClientAccepted(object sender, System.Net.Sockets.Socket e)
+        private void TcpServer_NewClientAccepted(object sender, SocketDataEventArgs e)
         {
-
+            if (e.DataParse == null)
+            {
+                e.DataParse = new PackageHelper() { Tag = e.WorkSocket };
+                ((PackageHelper)e.DataParse).PackageArrived += DataParse_PackageArrived;
+            }
         }
+
         private void TcpServer_DataReceived(object sender, SocketDataEventArgs e)
         {
-            if (e.WorkSocket == null || !e.WorkSocket.Connected) return;
-            if (e.DataParse == null) e.DataParse = new PackageHelper() { WorkSocket = e.WorkSocket };
-            e.DataParse.PackageArrived += DataParse_PackageArrived;
-            e.DataParse.Parse(e.Data, e.Data.Length);
+            try
+            {
+                ((PackageHelper)e.DataParse).Parse(e.Buffer, e.DataCount);
+                e.RecycleBuffer();
+            }
+            catch (Exception ex)
+            {
+                throw;
+            }
         }
 
         void DataParse_PackageArrived(object sender, object e)
@@ -98,13 +109,13 @@ namespace MicroRPC.Core
                     }
                     else
                     {
-                        errortext = "can not find the service";
+                        errortext = "Server Error : can not find the service";
                         package.code = (byte)PackageCode.Nonexistent;
                     }
                 }
                 catch (Exception ex)
                 {
-                    errortext = ex.Message;
+                    errortext = "Server Error : " + ex.Message;
                     if (ex.InnerException != null)
                         errortext = ex.InnerException.Message;
                     package.code = (byte)PackageCode.Error;
@@ -112,7 +123,7 @@ namespace MicroRPC.Core
                 }
             }
             else
-                errortext = "can not deserialize the rpc object";
+                errortext = "Server Error : can not deserialize the rpc object";
             if (!string.IsNullOrEmpty(errortext))
             {
                 package.data = Encoding.UTF8.GetBytes(errortext);
@@ -123,23 +134,19 @@ namespace MicroRPC.Core
 
         private void SendPackage(PackageHelper packageHelper, Package package)
         {
-            var dataargs = new SocketDataEventArgs();
-            dataargs.WorkSocket = packageHelper.WorkSocket;
-            dataargs.Data = packageHelper.PackData(package);
-            tcpServer.SendData(dataargs);
+            var buffer = packageHelper.PackData(package);
+            tcpServer.SendData((Socket)packageHelper.Tag, buffer);
         }
 
         private void TcpServer_DataSended(object sender, int e)
         {
 
         }
-        private void TcpServer_ClientDisconnected(object sender, System.Net.Sockets.Socket e)
+        private void TcpServer_ClientDisconnected(object sender, Socket e)
         {
-
         }
         private void TcpServer_ServerClosed(object sender, EventArgs e)
         {
-
         }
 
 

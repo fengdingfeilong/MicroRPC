@@ -54,6 +54,7 @@
     <Compile Include="TCPClientInfo.cs" />
     <Compile Include="TCPServer.cs" />
     <Compile Include="ClientSocketManager.cs" />
+    <Compile Include="ThreadSafeStackPool.cs" />
   </ItemGroup>
   <ItemGroup>
     <Content Include="3dll\Newtonsoft.Json.dll" />

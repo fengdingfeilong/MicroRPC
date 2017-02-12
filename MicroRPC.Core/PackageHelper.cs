@@ -25,15 +25,22 @@ namespace MicroRPC.Core
 
     public class PackageHelper : IDataParse
     {
-        public System.Net.Sockets.Socket WorkSocket;
+        private Object _tag;
+        //用来存储其他信息
+        public Object Tag
+        {
+            get { return _tag; }
+            set { _tag = value; }
+        }
+
         public PackageHelper()
         { }
 
         private enum ParseState { XID, TYPE, CODE, LENGTH, DATA }
         private ParseState _state = ParseState.XID;
 
-        private byte[] tempBuffer = new byte[4];
-        private int tempindex = 0;
+        private byte[] _tempBuffer = new byte[4];
+        private int _tempindex = 0;
         private Package _tempPackage = new Package();
         public event EventHandler<Object> PackageArrived;
         public void Parse(byte[] buffer, int length)
@@ -43,13 +50,14 @@ namespace MicroRPC.Core
                 switch (_state)
                 {
                     case ParseState.XID:
-                        tempBuffer[tempindex++] = buffer[i];
-                        if (tempindex == 4)
+                        _tempBuffer[_tempindex++] = buffer[i];
+                        if (_tempindex == 4)
                         {
-                            if (!BitConverter.IsLittleEndian) tempBuffer = (byte[])tempBuffer.Reverse();
-                            _tempPackage.xid = BitConverter.ToInt32(tempBuffer, 0);
+                            if (!BitConverter.IsLittleEndian)
+                                _tempBuffer = (byte[])_tempBuffer.Reverse();
+                            _tempPackage.xid = BitConverter.ToInt32(_tempBuffer, 0);
                             _state = ParseState.TYPE;
-                            tempindex = 0;
+                            _tempindex = 0;
                         }
                         break;
                     case ParseState.TYPE:
@@ -61,12 +69,11 @@ namespace MicroRPC.Core
                         _state = ParseState.LENGTH;
                         break;
                     case ParseState.LENGTH:
-                        tempBuffer[tempindex++] = buffer[i];
-                        if (tempindex == 4)
+                        _tempBuffer[_tempindex++] = buffer[i];
+                        if (_tempindex == 4)
                         {
-                            if (!BitConverter.IsLittleEndian) tempBuffer = (byte[])tempBuffer.Reverse();
-                            _tempPackage.length = BitConverter.ToInt32(tempBuffer, 0);
-                            tempindex = 0;
+                            if (!BitConverter.IsLittleEndian) _tempBuffer = (byte[])_tempBuffer.Reverse();
+                            _tempPackage.length = BitConverter.ToInt32(_tempBuffer, 0);
                             if (_tempPackage.length > 0)
                             {
                                 _tempPackage.data = new byte[_tempPackage.length];
@@ -74,14 +81,15 @@ namespace MicroRPC.Core
                             }
                             else// no data or error
                             {
-                                if (PackageArrived != null) PackageArrived(this, _tempPackage); 
+                                if (PackageArrived != null) PackageArrived(this, _tempPackage);
                                 Reset();
                             }
+                            _tempindex = 0;
                         }
                         break;
                     case ParseState.DATA:
-                        _tempPackage.data[tempindex++] = buffer[i];
-                        if (tempindex == _tempPackage.length)
+                        _tempPackage.data[_tempindex++] = buffer[i];
+                        if (_tempindex == _tempPackage.length)
                         {
                             if (PackageArrived != null) PackageArrived(this, _tempPackage);
                             Reset();
@@ -96,24 +104,22 @@ namespace MicroRPC.Core
             if (package.length < 0) return null;
             byte[] buffer = new byte[10 + package.length];
             var tempbuffer = BitConverter.GetBytes(package.xid);
-            if (!BitConverter.IsLittleEndian) tempbuffer = (byte[])tempbuffer.Reverse();
+            if (!BitConverter.IsLittleEndian) tempbuffer = (byte[])tempbuffer.Reverse();//先发低字节
             tempbuffer.CopyTo(buffer, 0);
             buffer[4] = package.type;
             buffer[5] = package.code;
             tempbuffer = BitConverter.GetBytes(package.length);
-            if (!BitConverter.IsLittleEndian) tempbuffer = (byte[])tempbuffer.Reverse();
             if (!BitConverter.IsLittleEndian) tempbuffer = (byte[])tempbuffer.Reverse();
             tempbuffer.CopyTo(buffer, 6);
             if (package.length > 0)
                 package.data.CopyTo(buffer, 10);
             return buffer;
         }
-
-        public void Reset()
+        
+        protected void Reset()
         {
-            tempindex = 0;
+            _tempindex = 0;
             _state = ParseState.XID;
-            tempBuffer = new byte[4];
             _tempPackage = new Package();
         }
 

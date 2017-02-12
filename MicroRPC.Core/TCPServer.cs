@@ -18,11 +18,16 @@ namespace MicroRPC.Core
             set { _workSocket = value; }
         }
 
-        private byte[] _data;
-        public byte[] Data
+        private BufferPool _readBufferPool = new BufferPool(5, 100);
+
+        private byte[] _buffer;
+        /// <summary>
+        /// this buffer should be not recycled after used by calling RecycleBuffer method
+        /// </summary>
+        public byte[] Buffer
         {
-            get { return _data; }
-            set { _data = value; }
+            get { return _buffer ?? (_buffer = _readBufferPool.Get()); }
+            set { _buffer = value; }
         }
 
         private int _dataCount;
@@ -43,15 +48,22 @@ namespace MicroRPC.Core
         }
 
         public SocketDataEventArgs()
-        { }
+        {
+        }
+
+        public void RecycleBuffer()
+        {
+            if (_buffer != null)
+                _readBufferPool.Recycle(Buffer);
+        }
     }
 
     public class TCPServer
     {
         private const int MTU = 1460;
-        private Socket listenSocket;
+        private Socket _listenSocket;
 
-        public event EventHandler<Socket> NewClientAccepted;
+        public event EventHandler<SocketDataEventArgs> NewClientAccepted;
         public event EventHandler<Socket> ClientDisconnected;//client close the socket
         public event EventHandler ServerClosed;
         public event EventHandler<SocketDataEventArgs> DataReceived;
@@ -60,260 +72,252 @@ namespace MicroRPC.Core
         private int _maxConnection = 10000;
         private int _backlog = 1000;
 
+        private ThreadSafeStackPool<Socket> _connectSocketPool;
+        private ThreadSafeStackPool<SocketDataEventArgs> _socketDataArgsPool;
+        private ThreadSafeStackPool<SocketAsyncEventArgs> _readSocketArgsPool;
+        private ThreadSafeStackPool<SocketAsyncEventArgs> _writeSocketArgsPool;
+        private Semaphore _connectionSemaphore;
+
         private int _port = 9006;
         public TCPServer()
         {
+            _connectionSemaphore = new Semaphore(_maxConnection, _maxConnection);
         }
         public TCPServer(int port, int maxconnection)
         {
             _port = port;
             _maxConnection = maxconnection;
+            _connectionSemaphore = new Semaphore(_maxConnection, _maxConnection);
         }
 
-        /// <summary>
-        /// 是否使用异步方式通信
-        /// </summary>
-        public bool UseAsyncMode = true;
-
-        public void Open()
+        private void InitPool()
         {
-            listenSocket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+            _connectSocketPool = new ThreadSafeStackPool<Socket>(_maxConnection);
+            _socketDataArgsPool = new ThreadSafeStackPool<SocketDataEventArgs>(_maxConnection);
+            _readSocketArgsPool = new ThreadSafeStackPool<SocketAsyncEventArgs>(_maxConnection);
+            _writeSocketArgsPool = new ThreadSafeStackPool<SocketAsyncEventArgs>(_maxConnection);
+            for (int i = 0; i < _maxConnection; i++)
+            {
+                _connectSocketPool.Push(new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp));
+                _socketDataArgsPool.Push(new SocketDataEventArgs());
+
+                var readSocketArgs = new SocketAsyncEventArgs();
+                var buffer = new byte[MTU];
+                readSocketArgs.SetBuffer(buffer, 0, buffer.Length);
+                readSocketArgs.Completed += (s, e) => { ProcessEAPReceive(e); };
+                _readSocketArgsPool.Push(readSocketArgs);
+
+                var writeSocketArgs = new SocketAsyncEventArgs();
+                writeSocketArgs.Completed += (s, e) => { ProcessEAPSend(e); };
+                _writeSocketArgsPool.Push(writeSocketArgs);
+            }
+        }
+
+        public bool Open()
+        {
+            _listenSocket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
             try
             {
-                listenSocket.Bind(new IPEndPoint(IPAddress.Any, _port));
+                _listenSocket.Bind(new IPEndPoint(IPAddress.Any, _port));
                 if ((int)SocketOptionName.MaxConnections < _maxConnection)
                     Console.WriteLine("the max connnections is out of system requirement");
-                listenSocket.Listen(_backlog);
-                if (UseAsyncMode)
-                    listenSocket.BeginAccept(new AsyncCallback(HandleAccept), null);
-                else
-                {
-                    Task.Factory.StartNew(() =>
-                    {
-                        SyncAccept();
-                    });
-                }
+                _listenSocket.Listen(_backlog);
+                InitPool();
+                var args = new SocketAsyncEventArgs();
+                args.Completed += (s, e) => { ProcessEAPAccept(e); };
+                EAPStartAccept(args);
+                return true;
             }
-            catch
+            catch (Exception ex)
             {
                 Close();
+                Console.WriteLine("Open TCP Server Error : \n" + ex.Message);
+                return false;
             }
         }
 
-        private void SyncAccept()
+        private void EAPStartAccept(SocketAsyncEventArgs e)
         {
-            while (true)
+            _connectionSemaphore.WaitOne();
+            e.AcceptSocket = _connectSocketPool.Pop();
+            bool r = false;
+            try
             {
-                Socket socket = null;
-                try
+                r = _listenSocket.AcceptAsync(e);
+                if (!r)
+                    ProcessEAPAccept(e);
+            }
+            catch (ObjectDisposedException)//server closed
+            {
+                CloseSocket(e.AcceptSocket, true);
+                //Open();//restart server or other handle ?
+            }
+            catch (Exception ex)
+            {
+                throw;
+            }
+        }
+
+        private void ProcessEAPAccept(SocketAsyncEventArgs e)
+        {
+            if (e.SocketError == SocketError.Success)
+            {   //NewClientAccepted.BeginInvoke(this, socketDataArgs, null, null);// begininvoke will create a IAsyncResult object inside and damage performance, may use task or threadpool to inplace
+                ThreadPool.QueueUserWorkItem(obj =>
                 {
-                    socket = listenSocket.Accept();
-                }
-                catch (ObjectDisposedException ex)//server close the socket
+                    var socketDataArgs = _socketDataArgsPool.Pop();
+                    socketDataArgs.WorkSocket = (Socket)obj;
+                    var readArgs = _readSocketArgsPool.Pop();
+                    readArgs.AcceptSocket = (Socket)obj;
+                    readArgs.UserToken = socketDataArgs;
+                    if (NewClientAccepted != null)
+                        NewClientAccepted(this, socketDataArgs);
+                    EAPStartReceive(readArgs);
+                }, e.AcceptSocket);
+            }
+            else
+            {
+                CloseSocket(e.AcceptSocket, true);
+            }
+            EAPStartAccept(e);//continue to accept
+        }
+
+        private void EAPStartReceive(SocketAsyncEventArgs readArgs)
+        {
+            bool r = false;
+            try
+            {
+                r = readArgs.AcceptSocket.ReceiveAsync(readArgs);
+                if (!r)
+                    ProcessEAPReceive(readArgs);
+            }
+            catch (ObjectDisposedException)//client closed
+            {
+                ReleaseReadArgs(readArgs);
+            }
+            catch (Exception ex)
+            {
+            }
+        }
+
+        private void ProcessEAPReceive(SocketAsyncEventArgs readArgs)
+        {
+            if (readArgs.SocketError == SocketError.Success && readArgs.BytesTransferred > 0)
+            {
+                if (DataReceived != null)
                 {
-                }
-                catch (SocketException ex) //client close the socket ( SocketError.ConnectionReset ) 
-                {
-                    CloseSocket(socket);
-                }
-                catch (Exception ex)
-                {
-                    throw;
-                }
-                if (socket == null)
-                {
-                    Console.WriteLine("accept failed");
-                    Thread.Sleep(500);
-                    continue;
-                }
-                if (socket != null && NewClientAccepted != null) NewClientAccepted(this, socket);
-                Task.Factory.StartNew(w =>
-                {
-                    Socket workSocket = (Socket)w;
-                    SocketDataEventArgs dataargs = new SocketDataEventArgs();
-                    dataargs.WorkSocket = workSocket;
-                    dataargs.Data = new byte[MTU];
-                    while (true)
+                    try
                     {
-                        try
+                        var readDataArgs = (SocketDataEventArgs)readArgs.UserToken;
+                        Buffer.BlockCopy(readArgs.Buffer, 0, readDataArgs.Buffer, 0, readArgs.BytesTransferred);
+                        readDataArgs.DataCount = readArgs.BytesTransferred;
+                        //DataReceived.BeginInvoke(this, readDataArgs, null, null);// begininvoke will create a IAsyncResult object inside and damage performance, may use task or threadpool to inplace
+                        ThreadPool.QueueUserWorkItem(obj =>
                         {
-                            dataargs.DataCount = workSocket.Receive(dataargs.Data);
-                        }
-                        catch (ObjectDisposedException ex)//server close the socket
-                        {
-                        }
-                        catch (SocketException ex) //client close the socket ( SocketError.ConnectionReset ) 
-                        {
-                            CloseSocket(workSocket);
-                        }
-                        catch (Exception ex)
-                        {
-                            throw;
-                        }
-                        if (DataReceived != null && dataargs.DataCount > 0)
-                            DataReceived(this, dataargs);
+                            DataReceived(this, (SocketDataEventArgs)obj);
+                        }, readDataArgs);
                     }
-                }, socket);
+                    catch
+                    {
+                        Console.WriteLine("TCPServer ProcessEAPReceive : handle the received raw data error");
+                    }
+                }
+                EAPStartReceive(readArgs);//continue to receive
+            }
+            else
+            {
+                ReleaseReadArgs(readArgs);
             }
         }
 
-        public void SendData(SocketDataEventArgs args)
+        private void ReleaseReadArgs(SocketAsyncEventArgs readArgs)
         {
-            if (args == null || args.WorkSocket == null || !args.WorkSocket.Connected || args.Data == null) return;
+            var readDataArgs = (SocketDataEventArgs)readArgs.UserToken;
+            readDataArgs.WorkSocket = null;
+            readDataArgs.DataParse = null;
+            _socketDataArgsPool.Push(readDataArgs);//recycle the SocketDataEventArgs to reuse
+            CloseSocket(readArgs.AcceptSocket);
+
+            readArgs.UserToken = null;
+            _readSocketArgsPool.Push(readArgs);//recycle the SocketAsyncEventArgs to reuse
+        }
+
+        public void SendData(Socket workSocket, byte[] data)
+        {
+            var writeArgs = _writeSocketArgsPool.Pop();
+            writeArgs.AcceptSocket = workSocket;
+            writeArgs.SetBuffer(data, 0, data.Length);
+            EAPSendData(writeArgs);
+        }
+
+        private void EAPSendData(SocketAsyncEventArgs writeArgs)
+        {
+            bool r = false;
             try
             {
-                Task.Factory.StartNew(() =>
-                {
-                    args.WorkSocket.Send(args.Data);
-                });
+                r = writeArgs.AcceptSocket.SendAsync(writeArgs);
+                if (!r)
+                    ProcessEAPSend(writeArgs);
             }
-            catch (ObjectDisposedException ex)//server close the socket
+            catch (ObjectDisposedException)//client closed
             {
+                CloseSocket(writeArgs.AcceptSocket);
             }
-            catch (SocketException ex) //client close the socket ( SocketError.ConnectionReset ) 
-            {
-                CloseSocket(args.WorkSocket);
-            }
-            catch
+            catch (Exception ex)
             {
                 throw;
             }
         }
-
-        private void HandleAccept(IAsyncResult result)
+        private void ProcessEAPSend(SocketAsyncEventArgs writeArgs)
         {
-            Socket workSocket = null;
-            try
+            if (writeArgs.SocketError == SocketError.Success && writeArgs.BytesTransferred > 0)
             {
-                if (listenSocket != null)
-                {
-                     workSocket = listenSocket.EndAccept(result);
-                     BeginReceive(workSocket);
+                if (DataReceived != null)
+                {   //DataSended.BeginInvoke(this, writeArgs.BytesTransferred, null, null);// begininvoke will create a IAsyncResult object inside and damage performance, may use task or threadpool to inplace
+                    ThreadPool.QueueUserWorkItem(obj => { DataSended(this, (int)obj); }, writeArgs.BytesTransferred);
                 }
             }
-            catch (ObjectDisposedException ex)//server close the socket
+            else
             {
+                CloseSocket(writeArgs.AcceptSocket);
             }
-            catch (SocketException ex) //client close the socket ( SocketError.ConnectionReset ) 
-            {
-                CloseSocket(workSocket);
-            }
-            catch (Exception ex)
-            {
-                throw;
-            }
-            listenSocket.BeginAccept(new AsyncCallback(HandleAccept), null);
-            if (workSocket != null && NewClientAccepted != null) NewClientAccepted(this, workSocket);
+            _writeSocketArgsPool.Push(writeArgs);//recycle the write SocketAsyncArgs
         }
 
-        private void BeginReceive(Socket workSocket)
+        private void CloseSocket(Socket workSocket, bool serverSide = false)
         {
-            if (workSocket != null && workSocket.Connected)
+            if (workSocket != null)
             {
-                SocketDataEventArgs dataargs = new SocketDataEventArgs();
-                dataargs.WorkSocket = workSocket;
-                dataargs.Data = new byte[MTU];
-                dataargs.WorkSocket.BeginReceive(dataargs.Data, 0, dataargs.Data.Length, SocketFlags.None, new AsyncCallback(HandleReceive), dataargs);
-            }
-        }
-
-        private void HandleReceive(IAsyncResult result)
-        {
-            if (result == null || result.AsyncState == null) return;
-            SocketDataEventArgs dataargs = (SocketDataEventArgs)result.AsyncState;
-            Socket workSocket = dataargs.WorkSocket;
-            try
-            {
-                dataargs.DataCount = workSocket.EndReceive(result);
-                BeginReceive(workSocket);
-            }
-            catch (ObjectDisposedException ex)//server close the socket
-            {
-            }
-            catch (SocketException ex) //client close the socket ( SocketError.ConnectionReset ) 
-            {
-                CloseSocket(workSocket);
-            }
-            catch (Exception ex)
-            {
-                throw;
-            }
-            if (DataReceived != null && dataargs.DataCount > 0) DataReceived(this, dataargs);
-        }
-
-        public void SendDataAsync(SocketDataEventArgs args)
-        {
-            if (args == null || args.WorkSocket == null || !args.WorkSocket.Connected || args.Data == null) return;
-            try
-            {
-                args.WorkSocket.BeginSend(args.Data, 0, args.Data.Length, SocketFlags.None, new AsyncCallback(HandleSend), args);
-            }
-            catch (ObjectDisposedException ex)//server close the socket
-            {
-            }
-            catch (SocketException ex) //client close the socket ( SocketError.ConnectionReset ) 
-            {
-                CloseSocket(args.WorkSocket);
-            }
-            catch
-            {
-                throw;
-            }
-        }
-
-        private void HandleSend(IAsyncResult result)
-        {
-            if (result == null || result.AsyncState == null) return;
-            SocketDataEventArgs dataargs = (SocketDataEventArgs)result.AsyncState;
-            Socket workSocket = dataargs.WorkSocket;
-            byte[] buffer = dataargs.Data;
-            int count = 0;
-            try
-            {
-                count = workSocket.EndSend(result);
-                BeginReceive(workSocket);
-            }
-            catch (ObjectDisposedException ex)//server close the socket
-            {
-            }
-            catch (SocketException ex) //client close the socket ( SocketError.ConnectionReset ) 
-            {
-                CloseSocket(workSocket);
-            }
-            catch
-            {
-                throw;
-            }
-            if (DataSended != null) DataSended(this, count);
-        }
-
-        private void CloseSocket(Socket socket)
-        {
-            if (socket != null)
-            {
-                if (ClientDisconnected != null && socket.Connected) ClientDisconnected(this, socket);
+                if (ClientDisconnected != null)
+                {
+                    ClientDisconnected(this, workSocket);//sync handle
+                }
                 try
                 {
-                    if (socket.Connected)
-                        socket.Shutdown(SocketShutdown.Both);
+                    if (serverSide && workSocket.Connected || !serverSide)
+                    {
+                        _connectSocketPool.Push(new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp));
+                        _connectionSemaphore.Release();
+                    }
+                    if (workSocket.Connected) //server side request close
+                        workSocket.Shutdown(SocketShutdown.Both);
                 }
                 catch { }
-                socket.Close();
-                socket = null;
+                workSocket.Close();
+                workSocket = null;
             }
         }
 
         public void Close()
         {
-            if (listenSocket != null)
+            if (_listenSocket != null)
             {
                 try
                 {
-                    listenSocket.Shutdown(SocketShutdown.Both);
+                    _listenSocket.Shutdown(SocketShutdown.Both);
                 }
                 catch { }
-                listenSocket.Close();
-                listenSocket = null;
+                _listenSocket.Close();
+                _listenSocket = null;
                 if (ServerClosed != null) ServerClosed(this, EventArgs.Empty);
             }
         }
