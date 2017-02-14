@@ -170,7 +170,10 @@ namespace MicroRPC.Core
                     readArgs.AcceptSocket = (Socket)obj;
                     readArgs.UserToken = socketDataArgs;
                     if (NewClientAccepted != null)
-                        NewClientAccepted(this, socketDataArgs);
+                    {
+                        var temp = NewClientAccepted;
+                        temp(this, socketDataArgs);
+                    }
                     EAPStartReceive(readArgs);
                 }, e.AcceptSocket);
             }
@@ -213,7 +216,8 @@ namespace MicroRPC.Core
                         //DataReceived.BeginInvoke(this, readDataArgs, null, null);// begininvoke will create a IAsyncResult object inside and damage performance, may use task or threadpool to inplace
                         ThreadPool.QueueUserWorkItem(obj =>
                         {
-                            DataReceived(this, (SocketDataEventArgs)obj);
+                            var temp = DataReceived;
+                            temp(this, (SocketDataEventArgs)obj);
                         }, readDataArgs);
                     }
                     catch
@@ -271,9 +275,13 @@ namespace MicroRPC.Core
         {
             if (writeArgs.SocketError == SocketError.Success && writeArgs.BytesTransferred > 0)
             {
-                if (DataReceived != null)
+                if (DataSended != null)
                 {   //DataSended.BeginInvoke(this, writeArgs.BytesTransferred, null, null);// begininvoke will create a IAsyncResult object inside and damage performance, may use task or threadpool to inplace
-                    ThreadPool.QueueUserWorkItem(obj => { DataSended(this, (int)obj); }, writeArgs.BytesTransferred);
+                    ThreadPool.QueueUserWorkItem(obj =>
+                    {
+                        var temp = DataSended;
+                        temp(this, (int)obj);
+                    }, writeArgs.BytesTransferred);
                 }
             }
             else
@@ -289,7 +297,8 @@ namespace MicroRPC.Core
             {
                 if (ClientDisconnected != null)
                 {
-                    ClientDisconnected(this, workSocket);//sync handle
+                    var temp = ClientDisconnected;
+                    temp(this, workSocket);//sync handle
                 }
                 try
                 {
@@ -318,7 +327,11 @@ namespace MicroRPC.Core
                 catch { }
                 _listenSocket.Close();
                 _listenSocket = null;
-                if (ServerClosed != null) ServerClosed(this, EventArgs.Empty);
+                if (ServerClosed != null)
+                {
+                    var temp = ServerClosed;
+                    temp(this, EventArgs.Empty);
+                }
             }
         }
 
