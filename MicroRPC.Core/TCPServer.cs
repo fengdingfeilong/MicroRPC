@@ -9,6 +9,12 @@ using System.Threading.Tasks;
 
 namespace MicroRPC.Core
 {
+    public interface IDataParse
+    {
+        void Parse(byte[] buffer, int length);
+        event EventHandler<Object> PackageArrived;
+    }
+
     public class SocketDataEventArgs : EventArgs
     {
         private Socket _workSocket;
@@ -57,7 +63,7 @@ namespace MicroRPC.Core
                 _readBufferPool.Recycle(Buffer);
         }
     }
-
+    
     public class TCPServer
     {
         private const int MTU = 1460;
