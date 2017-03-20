@@ -16,13 +16,7 @@ namespace MicroRPC.Core
         public int length;//消息体长度
         public byte[] data;//消息体
     }
-
-    public interface IDataParse
-    {
-        void Parse(byte[] buffer, int length);
-        event EventHandler<Object> PackageArrived;
-    }
-
+    
     public class PackageHelper : IDataParse
     {
         private Object _tag;
