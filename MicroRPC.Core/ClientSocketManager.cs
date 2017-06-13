@@ -20,7 +20,32 @@ namespace MicroRPC.Core
             get { return _clients ?? (_clients = new List<TCPClientInfo>()); }
             set { _clients = value; }
         }
-
+        
+        private int readCursor = 0;
+        public TCPClientInfo ReadFirst()
+        {
+            lock (m_lock)
+            {
+                readCursor = 0;
+                if (Clients.Count > 0)
+                    return Clients[readCursor++];
+                return null;
+            }
+        }
+        /// <summary>
+        /// 调用此方法前应该先调用 ReadFirst
+        /// </summary>
+        /// <returns></returns>
+        public TCPClientInfo ReadNext()
+        {
+            lock (m_lock)
+            {
+                if (readCursor < Clients.Count)
+                    return Clients[readCursor++];
+                return null;
+            }
+        }
+        
         public void AddClient(TCPClientInfo clientinfo)
         {
             lock (m_lock)
@@ -53,6 +78,7 @@ namespace MicroRPC.Core
                     if (Clients[i].WorkSocket == socket)
                     {
                         Clients.RemoveAt(i);
+                        if (i < readCursor) readCursor--;
                         break;
                     }
                 }
