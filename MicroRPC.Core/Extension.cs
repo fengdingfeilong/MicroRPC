@@ -30,7 +30,12 @@ namespace MicroRPC.Core
             }
             finally
             {
-                socket.Blocking = blockingState;
+                try
+                {
+                    socket.Blocking = blockingState;
+                }
+                catch
+                { }
             }
             return socket.Connected;
         }
