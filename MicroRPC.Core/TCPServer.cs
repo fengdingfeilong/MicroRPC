@@ -244,7 +244,7 @@ namespace MicroRPC.Core
                             temp(this, (SocketDataEventArgs)obj);
                         }, readDataArgs);
                     }
-                    catch
+                    catch (Exception ex)
                     {
                         Console.WriteLine("TCPServer ProcessEAPReceive : handle the received raw data error");
                         if (ErrorOccured != null)
