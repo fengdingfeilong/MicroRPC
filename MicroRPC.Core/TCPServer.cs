@@ -74,6 +74,7 @@ namespace MicroRPC.Core
         public event EventHandler ServerClosed;
         public event EventHandler<SocketDataEventArgs> DataReceived;
         public event EventHandler<int> DataSended;
+        public event Action<string, Exception> ErrorOccured;
 
         private int _maxConnection = 10000;
         private int _backlog = 1000;
@@ -84,6 +85,8 @@ namespace MicroRPC.Core
         private ThreadSafeStackPool<SocketAsyncEventArgs> _writeSocketArgsPool;
         private Semaphore _connectionSemaphore;
 
+        private Object m_CloseLock = new Object();
+        
         private int _port = 9006;
         public TCPServer()
         {
@@ -137,6 +140,8 @@ namespace MicroRPC.Core
             catch (Exception ex)
             {
                 Close();
+                if (ErrorOccured != null)
+                    ErrorOccured("TCPServer.Open", ex);
                 Console.WriteLine("Open TCP Server Error : \n" + ex.Message);
                 return false;
             }
@@ -160,7 +165,9 @@ namespace MicroRPC.Core
             }
             catch (Exception ex)
             {
-                throw;
+                if (ErrorOccured != null)
+                    ErrorOccured("TCPServer.EAPStartAccept", ex);
+                //throw;
             }
         }
 
@@ -170,24 +177,33 @@ namespace MicroRPC.Core
             {   //NewClientAccepted.BeginInvoke(this, socketDataArgs, null, null);// begininvoke will create a IAsyncResult object inside and damage performance, may use task or threadpool to inplace
                 ThreadPool.QueueUserWorkItem(obj =>
                 {
-                    var socketDataArgs = _socketDataArgsPool.Pop();
-                    socketDataArgs.WorkSocket = (Socket)obj;
-                    var readArgs = _readSocketArgsPool.Pop();
-                    readArgs.AcceptSocket = (Socket)obj;
-                    readArgs.UserToken = socketDataArgs;
-                    if (NewClientAccepted != null)
+                    try
                     {
-                        var temp = NewClientAccepted;
-                        temp(this, socketDataArgs);
+                        var socketDataArgs = _socketDataArgsPool.Pop();
+                        socketDataArgs.WorkSocket = (Socket)obj;
+                        var readArgs = _readSocketArgsPool.Pop();
+                        readArgs.AcceptSocket = (Socket)obj;
+                        readArgs.UserToken = socketDataArgs;
+                        if (NewClientAccepted != null)
+                        {
+                            var temp = NewClientAccepted;
+                            temp(this, socketDataArgs);
+                        }
+                        EAPStartReceive(readArgs);
                     }
-                    EAPStartReceive(readArgs);
+                    catch (Exception ex)
+                    {
+                        if (ErrorOccured != null)
+                            ErrorOccured("TCPServer.ProcessEAPAccept-InnerThread", ex);
+                    }
                 }, e.AcceptSocket);
             }
             else
             {
                 CloseSocket(e.AcceptSocket, true);
             }
-            EAPStartAccept(e);//continue to accept
+            if (_listenSocket != null)
+                EAPStartAccept(e);//continue to accept
         }
 
         private void EAPStartReceive(SocketAsyncEventArgs readArgs)
@@ -205,6 +221,8 @@ namespace MicroRPC.Core
             }
             catch (Exception ex)
             {
+                if (ErrorOccured != null)
+                    ErrorOccured("TCPServer.EAPStartReceive", ex);
             }
         }
 
@@ -229,9 +247,12 @@ namespace MicroRPC.Core
                     catch
                     {
                         Console.WriteLine("TCPServer ProcessEAPReceive : handle the received raw data error");
+                        if (ErrorOccured != null)
+                            ErrorOccured("TCPServer.ProcessEAPReceive", ex);
                     }
                 }
-                EAPStartReceive(readArgs);//continue to receive
+                if (_listenSocket != null)
+                    EAPStartReceive(readArgs);//continue to receive
             }
             else
             {
@@ -241,14 +262,22 @@ namespace MicroRPC.Core
 
         private void ReleaseReadArgs(SocketAsyncEventArgs readArgs)
         {
-            var readDataArgs = (SocketDataEventArgs)readArgs.UserToken;
-            readDataArgs.WorkSocket = null;
-            readDataArgs.DataParse = null;
-            _socketDataArgsPool.Push(readDataArgs);//recycle the SocketDataEventArgs to reuse
-            CloseSocket(readArgs.AcceptSocket);
+            try
+            {
+                var readDataArgs = (SocketDataEventArgs)readArgs.UserToken;
+                readDataArgs.WorkSocket = null;
+                readDataArgs.DataParse = null;
+                _socketDataArgsPool.Push(readDataArgs);//recycle the SocketDataEventArgs to reuse
+                CloseSocket(readArgs.AcceptSocket);
 
-            readArgs.UserToken = null;
-            _readSocketArgsPool.Push(readArgs);//recycle the SocketAsyncEventArgs to reuse
+                readArgs.UserToken = null;
+                _readSocketArgsPool.Push(readArgs);//recycle the SocketAsyncEventArgs to reuse
+            }
+            catch (Exception ex)
+            {
+                if (ErrorOccured != null)
+                    ErrorOccured("TCPServer.ReleaseReadArgs", ex);
+            }
         }
 
         public void SendData(Socket workSocket, byte[] data)
@@ -274,7 +303,8 @@ namespace MicroRPC.Core
             }
             catch (Exception ex)
             {
-                throw;
+                if (ErrorOccured != null)
+                    ErrorOccured("TCPServer.EAPSendData", ex);
             }
         }
         private void ProcessEAPSend(SocketAsyncEventArgs writeArgs)
@@ -299,26 +329,33 @@ namespace MicroRPC.Core
 
         private void CloseSocket(Socket workSocket, bool serverSide = false)
         {
-            if (workSocket != null)
+            lock (m_CloseLock)
             {
-                if (ClientDisconnected != null)
+                if (workSocket != null)
                 {
-                    var temp = ClientDisconnected;
-                    temp(this, workSocket);//sync handle
-                }
-                try
-                {
-                    if (serverSide && workSocket.Connected || !serverSide)
+                    if (ClientDisconnected != null)
                     {
-                        _connectSocketPool.Push(new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp));
-                        _connectionSemaphore.Release();
+                        var temp = ClientDisconnected;
+                        temp(this, workSocket);//sync handle
                     }
-                    if (workSocket.Connected) //server side request close
-                        workSocket.Shutdown(SocketShutdown.Both);
+                    try
+                    {
+                        if (serverSide || (!serverSide && workSocket.IsConnected()))
+                        {
+                            _connectSocketPool.Push(new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp));
+                            _connectionSemaphore.Release();
+                        }
+                        if (workSocket.IsConnected()) //server side request close
+                            workSocket.Shutdown(SocketShutdown.Both);
+                    }
+                    catch (Exception ex)
+                    {
+                        if (ErrorOccured != null)
+                            ErrorOccured("TCPServer.CloseSocket", ex);
+                    }
+                    workSocket.Close();
+                    workSocket = null;
                 }
-                catch { }
-                workSocket.Close();
-                workSocket = null;
             }
         }
 
